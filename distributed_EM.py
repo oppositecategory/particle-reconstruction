@@ -1,22 +1,43 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from torchvision.transforms.functional import affine 
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.beta import Beta
 
 import numpy as np
 import mrcfile
+from tqdm import tqdm
 
 from PIL import Image 
 import functools
 
-from tqdm import tqdm
-import matplotlib.pyplot as plt 
+
+
+class GPUContextManager:
+    def __init__(self, rank):
+        self.rank = rank 
+        self.prev_device = torch.cuda.current_device()
+
+    def __enter__(self):
+        torch.cuda.set_device(self.rank)
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        torch.cuda.set_device(self.prev_device)
+        torch.set_default_tensor_type(torch.FloatTensor)
+
     
+def detect_GPU_context(func):
+    @functools.wraps(func)
+    def wrapper(device, *args, **kwargs):
+        with GPUContextManager(device):
+            args = tuple(arg.to(device) if isinstance(arg, torch.Tensor) else arg for arg in args)
+            kwargs = {k: v.to(device) if isinstance(v,torch.Tensor) else v for k,v in kwargs.items()}
+            return func(device, *args, **kwargs)
+    return wrapper
+
 @torch.no_grad()
 def compute_posterior_normalization(device,A,X, std,std_xy,K=10000):
     n = A.shape[0]
@@ -59,8 +80,8 @@ def compute_posterior_normalization(device,A,X, std,std_xy,K=10000):
 def expectation_maximization(device,A, data, std, std_xy, K=10000):
     """
     TODO:
-    - Go through the equations to make sure they are indeed correct 
-    - Experiment with a simple distributed script to make data be 8x bigger
+    - Fix CUDA out of memory bug 
+    - Test and run without scaling then update prior to work with scaling
     """
     n = A.shape[0]    
     batch_size = K // 10
@@ -102,39 +123,69 @@ def expectation_maximization(device,A, data, std, std_xy, K=10000):
             X_psi = F.grid_sample(X.expand(batch_size, 1, n, n), inv_grid, align_corners=False).squeeze(1) 
 
             X_log_density = -torch.norm(X - A_psi, dim=(1, 2))**2 / (2 * std**2) - (n**2) * torch.log((2 * torch.pi) ** 0.5 * std)
-            psi_log_density = -(torch.norm(translations, dim=1) / std_xy) ** 2 * 0.5 - torch.log((2*torch.pi * std_xy) ** 2)
-            
-            # Numerical stability trick to prevent underflow
+            psi_log_density = -(torch.norm(translations, dim=1) / std_xy) ** 2 * 0.5 - torch.log(4 * torch.pi * std_xy ** 2)
+
             X_density = torch.exp(X_log_density - X_log_density.max())
             psi_density = torch.exp(psi_log_density - psi_log_density.max())
             
             w = (X_density * psi_density)/C
             A_t += (w.view(-1, 1, 1) * X_psi).sum(dim=0)
             del X_density, psi_density, A_psi, X_psi
-    return A_t/data.shape[0]
+    return A_t
+
+def distributed_EM(rank,world_size,A, data,std,std_xy):
+    """
+    Distributed calculationg of maximizing expectation.
+
+    Args:
+        rank: index of GPU to be used
+        world_size: number of available GPUs
+        A: current estimation of underlying object
+        data: the whole image dataset
+        std: variance of the noise in the images
+        std_xy: the variance of the translations prior
+    """
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    device = torch.device(f"cuda:{rank}")
+
+    if rank == 0:
+        A = A.to(device)
+        std = std.to(device)
+        std_xy = std_xy.to(device)
+
+    dist.barrier()
+
+    dist.broadcast(A, src=0)
+    dist.broadcast(std, src=0)
+    dist.broadcast(std_xy, src=0)
+
+    local_data = data.chunk(world_size)[rank].to(device)
+    local_result = expectation_maximization(device,A, local_data, std,std_xy)
+
+    #global_result = torch.zeros_like(local_result,device=device).to(device)
+    dist.all_reduce(local_result, op = dist.ReduceOp.SUM)
+    global_result = local_result / data.shape[0]
 
 
-    
+    dist.barrier()
+    dist.destroy_process_group()
+
+    return global_result if rank == 0 else None
+
 if __name__ == "__main__":
-    #python -m torch.distributed.launch EM.py
-    device = 'cuda'
+    #python -m torch.distributed.launch distributed_EM.py
+    world_size = torch.cuda.device_count()
     img = Image.open("image.png").convert("L").resize((256,256))
     img = np.array(img)
     n = img.shape[0]
-    std = torch.tensor(0.01).to(device)
-    std_xy = torch.tensor(0.2).to(device)
+    std = torch.tensor(0.01).cuda()
+    std_xy = torch.tensor(0.2).cuda()
 
     with mrcfile.open("data.mrc",permissive=True) as mrc:
         X = mrc.data
 
-    A = torch.tensor(np.mean(X[:100],axis=0)).to(device)
-    #A = np.array(Image.open('experiment/4_iteration.png').convert('L'))
-    #A = torch.tensor(A).to(device).type(torch.float32)
-    X = torch.tensor(X[:200]).to(device)
+    A = torch.tensor(np.mean(X[:100],axis=0))
+    X = torch.tensor(X[:800])
 
-    for i in range(5):
-        print(f"EM iteration {i}/5")
-        A = expectation_maximization(device, A, X,std, std_xy)
-        result = A.cpu().numpy().astype(np.uint8)
-        result = Image.fromarray(result,'L')
-        result.save(f'experiment/{i}_iteration.png')
+
+    mp.spawn(distributed_EM, args=(world_size, A, X, std,std_xy), nprocs=world_size)
