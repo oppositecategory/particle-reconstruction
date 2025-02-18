@@ -17,7 +17,7 @@ from PIL import Image
 from tqdm import tqdm
     
 @torch.no_grad()
-def expectation_maximization(device,A, data, std, std_xy, K=2*10000,N=100):
+def expectation_maximization(device,A, data, std, std_xy, K=10000,N=100):
     """
     TODO:
     - Add scaling aswell including it into the prior
@@ -26,7 +26,7 @@ def expectation_maximization(device,A, data, std, std_xy, K=2*10000,N=100):
     - Add distributed code to make use of larger datasets ~ 1000 (for higher variance)
     """
     n = A.shape[0]    
-    batch_size = K // 20
+    batch_size = K // 10
     num_batch = K // batch_size
 
     normal_dist = MultivariateNormal(loc=torch.zeros(2).to(device), 
@@ -51,7 +51,7 @@ def expectation_maximization(device,A, data, std, std_xy, K=2*10000,N=100):
             transformations[:, 0, 1] = -torch.sin(thetas)
             transformations[:, 1, 0] = torch.sin(thetas)
             transformations[:, 1, 1] = torch.cos(thetas)
-            transformations[:, :, 2] = translations / (2*n)
+            transformations[:, :, 2] = 2*translations / n
 
             grid = F.affine_grid(transformations, size=(batch_size, 1, n, n), align_corners=False)
             #A_psi = F.grid_sample(A.expand(K, 1, n, n), grid, align_corners=False).squeeze(1) * scales.view(-1, 1, 1)
@@ -82,12 +82,11 @@ def expectation_maximization(device,A, data, std, std_xy, K=2*10000,N=100):
 
     
 if __name__ == "__main__":
-    #python -m torch.distributed.launch EM.py
     device = 'cuda'
-    std = torch.tensor(5).to(device)    
-    std_xy = torch.tensor(5).to(device)
+    std = torch.tensor(2).to(device)    
+    std_xy = torch.tensor(2).to(device)
 
-    with mrcfile.open("data3.mrc",permissive=True) as mrc:
+    with mrcfile.open("data2.mrc",permissive=True) as mrc:
         X = mrc.data
 
     init = np.array(Image.open("init.png").convert('L'))

@@ -9,7 +9,7 @@ import mrcfile
 
 from PIL import Image 
 
-def generate_data(K,std=5,std_xy=1,n=256):
+def generate_data(K,std=2,std_xy=2,n=256):
     img = Image.open("image.png").convert("L").resize((n,n))
     img = torch.tensor(np.array(img),dtype=torch.float32)
 
@@ -24,7 +24,7 @@ def generate_data(K,std=5,std_xy=1,n=256):
     transformations[:, 0, 1] = -torch.sin(thetas)
     transformations[:, 1, 0] = torch.sin(thetas)
     transformations[:, 1, 1] = torch.cos(thetas)
-    transformations[:, :, 2] = translations/(2*n)
+    transformations[:, :, 2] = 2*translations/n
 
     grid = F.affine_grid(transformations, size=(K, 1, n, n), align_corners=False)
     data = F.grid_sample(img.expand(K, 1, n, n), grid, align_corners=False).squeeze(1)
