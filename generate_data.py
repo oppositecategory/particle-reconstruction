@@ -9,7 +9,7 @@ import mrcfile
 
 from PIL import Image 
 
-def generate_data(K,std=2,std_xy=2,n=256):
+def generate_data(K,std=20,std_xy=5,n=256):
     img = Image.open("image.png").convert("L").resize((n,n))
     img = torch.tensor(np.array(img),dtype=torch.float32)
 
@@ -28,9 +28,10 @@ def generate_data(K,std=2,std_xy=2,n=256):
 
     grid = F.affine_grid(transformations, size=(K, 1, n, n), align_corners=False)
     data = F.grid_sample(img.expand(K, 1, n, n), grid, align_corners=False).squeeze(1)
+    #data = data.numpy()
     data = data + torch.normal(mean=0,std=std,size=(K,n,n))
 
-    data = data.numpy().astype(np.uint8)
+    data = data.numpy()
     with mrcfile.new('data3.mrc',overwrite=True) as mrc:
         mrc.set_data(data)
 

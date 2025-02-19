@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from torchvision.transforms.functional import affine 
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.uniform import Uniform
 from torch.distributions.beta import Beta
@@ -23,7 +22,6 @@ def expectation_maximization(device,A, data, std, std_xy, K=10000,N=100):
     - Add scaling aswell including it into the prior
     - Check importance sampling
     - Check into ways to reduce sampling in later iterations
-    - Add distributed code to make use of larger datasets ~ 1000 (for higher variance)
     """
     n = A.shape[0]    
     batch_size = K // 10
@@ -82,6 +80,7 @@ def expectation_maximization(device,A, data, std, std_xy, K=10000,N=100):
 
     
 if __name__ == "__main__":
+    #python -m torch.distributed.launch EM.py
     device = 'cuda'
     std = torch.tensor(2).to(device)    
     std_xy = torch.tensor(2).to(device)
