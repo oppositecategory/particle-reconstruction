@@ -49,68 +49,63 @@ def expectation_maximization(device,A, data, std, std_xy, K=10000,N=100):
             translations_logits = normal_dist.log_prob(translations).to(device)
             scales_logits = beta_dist.log_prob(scales).to(device)
 
-            scales = 5*scales
+            scales = 5.0*scales
 
             transformations = torch.zeros((batch_size, 2, 3)).to(device)
-            transformations[:, 0, 0] = torch.cos(thetas)
+            transformations[:, 0, 0] = scales * torch.cos(thetas)
             transformations[:, 0, 1] = -torch.sin(thetas)
             transformations[:, 1, 0] = torch.sin(thetas)
             transformations[:, 1, 1] = torch.cos(thetas)
-            transformations[:, :, 2] = 2*translations / n
+            transformations[:, :, 2] = 2*translations / n # PyTorch assumes translations are in [-1,1]
 
             grid = F.affine_grid(transformations, size=(batch_size, 1, n, n), align_corners=False)
-            A_psi = F.grid_sample(A.expand(batch_size, 1, n, n), grid, align_corners=False).squeeze(1)*scales.view(-1, 1, 1)
+            A_psi = F.grid_sample(A.expand(batch_size, 1, n, n), grid, align_corners=False).squeeze(1)*scales.view(batch_size, 1, 1)
 
             inv_rotations = transformations[...,:2].permute(0,2,1)
             inv_t = -torch.bmm(inv_rotations,transformations[...,2:])
             inv_trans = torch.cat([inv_rotations,inv_t],dim=-1)
             inv_grid = F.affine_grid(inv_trans,size=(batch_size,1,n,n), align_corners=False)
 
-            X_psi = F.grid_sample(X.expand(batch_size, 1, n, n), inv_grid, align_corners=False).squeeze(1) / scales.view(-1, 1, 1)
+            X_psi = F.grid_sample(X.expand(batch_size, 1, n, n), inv_grid, align_corners=False).squeeze(1) / scales.view(batch_size, 1, 1)
 
             X_log_density = -torch.norm(X - A_psi,dim=(1,2)) ** 2 / (2*std ** 2)
             X_log_density = X_log_density - torch.logsumexp(X_log_density,0) # Stable normalization
 
-            #psi_log_density = -(torch.norm(translations, dim=1) / std_xy) ** 2 * 0.5 - 2*torch.log(2 * torch.pi * std_xy) + torch.log(scales * (1-scales) **4)/30
             psi_log_density = thetas_logits + translations_logits + scales_logits
-
-            transformations_error = torch.norm(X_psi - A, dim=(1,2)) ** 2
   
             w = torch.exp(X_log_density + psi_log_density)
             w /= w.sum()
 
             Z_batch += (w * scales**2).sum()
-            std_batch += (scales.view(batch_size,1,1)**2 * w.view(batch_size,1,1) * transformations_error).sum()
-            stdxy_batch += (w.view(batch_size,1,1) * (torch.norm(translations)**2)).sum()
+            std_batch += ( w.view(batch_size,1,1) * torch.norm(X - A_psi,dim=(1,2)) ** 2 ).sum()
+            stdxy_batch += (w.view(batch_size,1,1) * (torch.norm(translations,dim=1)**2)).sum()
             integral += (w.view(batch_size, 1, 1) * X_psi * (scales**2).view(batch_size,1,1)).sum(dim=0)
         A_t += integral/K
         std_t +=  std_batch / K
         stdxy_t +=  stdxy_batch/K   
-        Z += Z_batch /K
-    std_t /= (n**2)
-    std_t /= data.shape[0]
+        Z += Z_batch/K
+    std_t /= ((n**2) * data.shape[0])
+    std_t = std_t ** 0.5
     stdxy_t /= 2*data.shape[0]
     stdxy_t = stdxy_t ** 0.5
     print(f"Updated noise variance estimation: {std_t}")
     print(f"Updated translations variance estimation: {stdxy_t}")
-    A_t = A_t / Z
-    return A_t, std_t, stdxy_t
+    return A_t/Z, std_t, stdxy_t
 
 
     
 if __name__ == "__main__":
     device = 'cuda'
-    std = torch.tensor(5).to(device)    
-    std_xy = torch.tensor(5).to(device)
+    std = torch.tensor(1).to(device)    
+    std_xy = torch.tensor(1).to(device)
 
     with mrcfile.open("data1.mrc",permissive=True) as mrc:
         X = mrc.data
 
     init = np.array(Image.open("init.png").convert('L'))
-    #init = np.array(Image.open("experiment/1_iteration.png").convert('L'))
     n = init.shape[0]
     A = torch.tensor(init,dtype=torch.float32).to(device)
-    X = torch.tensor(X[:200]).type(torch.float32).to(device)
+    X = torch.tensor(X).type(torch.float32).to(device)
 
     A = (A - A.min())/(A.max() - A.min())
     X = (X - X.min())/(X.max() - X.min())
