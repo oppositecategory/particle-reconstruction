@@ -11,8 +11,8 @@ import mrcfile
 from PIL import Image 
 import argparse
 
-def generate_data(K,std,std_xy,n,filename):
-    img = np.array(Image.open("image.png").convert("L").resize((n,n)))
+def generate_data(K,std,std_xy,n,data_name, filename):
+    img = np.array(Image.open(filename).convert("L").resize((n,n)))
     img = torch.tensor(np.array(img),dtype=torch.float32)
     img = (img - img.min())/(img.max() - img.min())
 
@@ -33,19 +33,19 @@ def generate_data(K,std,std_xy,n,filename):
     grid = F.affine_grid(transformations, size=(K, 1, n, n), align_corners=False)
     data = F.grid_sample(img.expand(K, 1, n, n), grid, align_corners=False).squeeze(1)
     data = data * scales.view(K,1,1) + torch.normal(mean=0,std=std,size=(K,n,n))
-    #data = data  + torch.normal(mean=0,std=std,size=(K,n,n))
 
     data = data.numpy()
-    with mrcfile.new(filename,overwrite=True) as mrc:
+    with mrcfile.new(data_name,overwrite=True) as mrc:
         mrc.set_data(data)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EM algorithm script with init and data inputs.")
     parser.add_argument('--amount', type=int, default=100, help='Size of data')
+    parser.add_argument('--image', type=str, default='image.png', help='The name of the original image')
     parser.add_argument('--std', type=int, default=0.01, help='The std for the noise')
     parser.add_argument('--std_xy', type=int, default=5, help='The std for the translations distribution')
     parser.add_argument('--size', type=int, default=256, help='The size of the images')
-    parser.add_argument('--name', type=str, default='data.mrc', help='The name of the mrcfile to be created')
+    parser.add_argument('--data', type=str, default='data.mrc', help='The name of the mrcfile to be created')
     args = parser.parse_args()
 
-    generate_data(args.amount, args.std,args.std_xy, args.size, args.name)
+    generate_data(args.amount, args.std,args.std_xy, args.size, args.data, args.image)

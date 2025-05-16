@@ -104,11 +104,13 @@ if __name__ == "__main__":
     parser.add_argument('--std', type=int, default=0.01, help='The std for the noise')
     parser.add_argument('--std_xy', type=int, default=5, help='The std for the translations distribution')
     parser.add_argument('--N', type=int, default=5, help='Number of iterations')
+    parser.add_argument('--n', type=int, default=256, help='Size of image')
+
 
     if not os.path.exists('experiments'):
         os.makedirs('experiments')
 
-    device = 'cuda:1'
+    device = 'cuda'
     args = parser.parse_args()
     std = torch.tensor(args.std).to(device)    
     std_xy = torch.tensor(args.std_xy).to(device)
@@ -119,10 +121,9 @@ if __name__ == "__main__":
     if args.init == None:
         init = np.mean(X,axis=0)
     else:
-        init = np.array(Image.open(args.init).convert("L").resize((256,256)))
+        init = np.array(Image.open(args.init).convert("L").resize((args.n,args.n)))
 
     n = init.shape[0]
-
     N = args.N
     
     A = torch.tensor(init,dtype=torch.float32).to(device)
