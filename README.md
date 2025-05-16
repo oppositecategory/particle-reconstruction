@@ -10,7 +10,7 @@ To generate data run the script generate_data.py with following flags:
 - --size: size of the images. default:256
 - --name: the name of the mrcfile to be created. default: data.mrc
 
-** Expectation Maximization. (EM.py)** 
+**Expectation Maximization. (EM.py)** 
 
 - --data: path to mrc file. REQUIRED 
 - --init: path to the initialization file. default: if none given it uses the average of the data.
